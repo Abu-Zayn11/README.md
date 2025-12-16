@@ -1,0 +1,1137 @@
+---
+title: "A Predictive and Inferential Study of Residential Property Sales"
+author: "Jurry Taalib-Deen"
+date: "2025-11-09"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Clarifying the Problem and Constraints
+
+#### The Problem
+
+-   The Lucas County Board of Revision (BOR) meets every fiscal year to review the values that were set on properties within the county by the Lucas County Auditor tri-annualy. The Auditor in the last evaluation (2021) used a third party company from Cincinnati to create a model that best describes that value of a property. While I was sitting on the BOR many complaints from professionals that work within the real estate industry, everyday taxpayers, and lawyers sparked a question that was bought up many times under different pretenses: ***"Does the model actually fit the data?"***. This and amongst other concerns were bought to question. Some other questions of interest are:
+
+    -   ***Is square footage the best indication of the projected sale of a residential property?***
+
+        -   The goal of solving this problem is to help professionals in Lucas county to better assess residential properties so there is a fair market value of it.
+        -   $$
+            H_{0}: \beta_{1} = \beta_{k} = 0 \\ H_{A}: \beta_{1} \neq \beta_{k} \neq 0
+            $$
+
+    -   ***Is location the most deterministic causal variable on the sale of a residential property?***
+
+        -   The goal of answering this is the same as the previous.
+
+    -   ***The age of a house isn't a deterministic causal variable.***
+
+        -   Many of the BOR officers assumed that the year a property was built was causal on the sales price.
+
+-   Lastly, there are many biases that come in to play when the three BOR officers are giving their expected value of a property, as well as the lack of an SOP (standard operating procedure) leads to high variance on what the new equated value of the property should be once given new information from the owner, this typically leads to values being set at a value that isn't true to the market value. Through my analysis I want to provide BOR officers with a model to better predict what they set value of the property should be.
+
+## Exploring the Data
+
+### Importing Data:
+
+```{r}
+#Let's first load all the necessary packages: 
+library(tidyverse)
+library(readxl)
+library(tidygeocoder)
+library(stargazer)
+library(AER)
+library(sf)
+library(rsample)
+library(recipes)
+library(xml2)
+library(broom)
+library(janitor)
+library(lubridate)
+library(outliers)
+library(fastDummies)
+library(sf)
+library(tinytex)
+library(knitr)
+```
+
+```{r}
+county_sales <- read_excel('/Users/deen/Documents/Education/Economic Research/Real Estate Prices/Copy of Data /Total Data Set.xlsx')
+
+county_sales
+```
+
+The variables of interest are as follows:
+
+-   *tax district*
+
+-   land use (specifically I am interested in sales that happened between commercial and residential
+
+-   owner (I want to see if the majority of buyers or consumers or firms by doing some text analysis)
+
+-   Full address (city, state, and zip code included)
+
+-   acres
+
+-   baths
+
+-   bedrooms
+
+-   stories
+
+-   yearbuilt (I will likely transform this variable into age because the year the property was built is a categorical variable - by transforming it to age it becomes a quantitative discrete variable)
+
+-   wall type (this variable is a catagorical variable in which it describes the building material of the building.
+
+-   seller ( I would like to compare the seller to owners for each year and see which proportion of sellers are businesses and which are consumers.)
+
+-   last sale price (this is our target variable of interest)
+
+-   Deed type (this variable is important because not every sale describes true market sale. "GW" deed type and "FD" are the best indicators of a true market sale.
+
+-   tla which essentially is the total square footage is assumed to have the largest inference on the target variable.
+
+-   appraised value is of interest because it's what the county auditor's model predicted what the value of a property would be.
+
+### Data exploration of Numeric Variables
+
+#### Sales by Month
+
+```{r}
+options(scipen = 999)
+set.seed(123)
+
+ggplot(county_sales, aes(`sales date`, `last sale price`))+
+  geom_line()+
+  scale_x_datetime(date_breaks = 'year')
+```
+
+#### Last Sale Price
+
+```{r}
+sum_sale_total <- summary(county_sales$`last sale price`)
+sum_sale_total
+
+sum_sale_date <- summary(county_sales$`last sale price`[])
+
+ggplot(county_sales, aes(`last sale price`))+
+  geom_histogram(bins = 40)
+```
+
+We will need to transform our target variable `last sale price` using a log transformation or the YeoJohnson() function. Also we must seperate our residential and commercial properties.
+
+#### Appraised Value
+
+```{r}
+sum_appraise <- summary(county_sales$`appraised value`)
+sum_appraise
+
+ggplot(county_sales, aes(`appraised value`))+
+  geom_histogram(bins = 40)
+```
+
+It seems that the appraised value distribution is almost exactly the same as the last sale price, which could suggest that the appraisers model fits the data. However it may be
+
+#### Acres
+
+```{r}
+sum_acres <- summary(county_sales$acres)
+sum_acres
+ggplot(county_sales, aes(acres))+
+  geom_histogram(binwidth = 5)
+```
+
+We will later need to transform this variable to get it close to a standard normal distribution
+
+#### Baths
+
+```{r}
+sum_baths <- summary(county_sales$baths)
+sum_baths
+
+ggplot(county_sales, aes(baths))+
+  geom_histogram()
+```
+
+Our baths variable has a few outliers that we will need to address later.
+
+#### Bedrooms
+
+```{r}
+sum_beds <- summary(county_sales$bedrooms)
+sum_beds
+ggplot(county_sales, aes(bedrooms))+
+  geom_histogram()
+
+```
+
+We can tell from this boxplot that we have many outliers and the averave is around 3 bedrooms. There are some observations that show 0 bedrooms but that is because not all of the properties are residential.
+
+#### Square Footage (tla)
+
+```{r}
+sum_tla <- summary(county_sales$tla)
+sum_tla
+
+ggplot(county_sales, aes(tla))+
+  geom_histogram(binwidth = 0.8)
+```
+
+It seems that we also must transform our tla variable to get it to a standard normal distribution
+
+#### Yearbuilt
+
+```{r}
+sum_yb <- summary(county_sales$yearbuilt)
+sum_yb
+
+ggplot(county_sales, aes(yearbuilt))+
+  geom_boxplot()
+
+
+```
+
+#### Sale Price - Square Footage - City
+
+```{r}
+options(scipen = 9)
+ggplot(county_sales, aes(tla, `last sale price`, colour = city))+
+  geom_point() +
+  scale_y_log10()+
+  scale_x_log10()
+```
+
+From looking at this chart we can see that there are a lot of values that didn't sale for an actual price, and some property values sold for relatively cheap. The reason for this is that we have some property values that were just pieces of un-buildable parcels, and there are some parcels that were deed transfers but are being picked up by the data as sales. There are also plenty of observations that had sold for under \$1000 - this could be due to not being residential or commercial properties and as well as foreclosures or deed transfers.
+
+Lets take a look at the Sale Price, and Square footage but have it depend upon general warranty (GW) and feudiciary (FD) deeds only.
+
+#### Sale Price - Sqft - Deed Type
+
+```{r}
+
+ggplot(county_sales, aes(tla, `last sale price`, alpha = 0.05, color = ))+
+  geom_point()+
+  facet_wrap(~ `deed type` == "GW" | `deed type` == "FD")+
+  scale_x_log10()+
+  scale_y_log10()+
+  labs(title = "Square Footage vs. Sale Price", subtitle = "Non-GW Deeds vs GW & FD Deeds")+
+  xlab("Square Footage")
+```
+
+What is concerning about these scatter plots is that it still shows some observations at zero for GW deeds & FD deeds. Which may suggest that the general thought of GW & FD deeds being more reliable of depicting fair market value (arms length sale) is incorrect. Unless it is true that GW & FD deeds count for majority of the observations.
+
+```{r}
+#Testing which deed type makes up majority of our observations 
+
+tabyl(county_sales$`deed type`)
+```
+
+From this frequency table we can see that FD deed is at the lower middle of all observations and that GW, and QC which stands for Quit Claim deed are the majority of our observations. This would suggest that a large proportion of the "sales" in the county are not actual sales but rather deed transfers between individuals. For example, many quit claims are completed in divorce cases or are completed between family members. Also, this did type doesn't offer protection to the buyer in the case that the title is not a clean title. Our third largest deed type is ST which stands for Survivorship Tenancy deed - which are for incidents of the death of an owner; when there is co-ownership, the death transfers the full deed to the other owner - avoiding the probate process. We still aren't sure where majority of our zeros are coming from, which is important in understanding because when we transform our data these zeros can cause issues. Also, we are interested strictly in fair market sales because that is how the county BOR makes it's decisions.
+
+Let's create a scatter plot matrix to get a better idea of what our data looks like.
+
+```{r}
+ggplot(county_sales, aes(`last sale price`)) + 
+  geom_dotplot()+
+  facet_wrap(~ `deed type`, scales = "free")
+
+```
+
+From this matrix it seems that just about every deed type has observations at 0 except for the few that don't have many observations.
+
+## Data Cleaning and Transformation
+
+#### Dealing with Missing Values
+
+Let's start by creating a heat map so we can see which values are missing and from what variables. Than we will be able to impute some of these missing values.
+
+```{r}
+county_sales |> 
+  is.na() |> 
+  reshape2::melt() |> 
+  ggplot(aes(Var2, Var1, fill = value)) +
+  geom_raster()+
+  coord_flip()+ 
+  scale_y_continuous(NULL, expand = c(0,0)) + 
+  scale_fill_grey(name = "", 
+                  labels = c("Present", "Missing"))+
+  xlab("Observations")+
+  theme(axis.text.y = element_text(size = 8))
+```
+
+From looking at this heat map - I would assume a lot of our missing values are due to commercial properties, and other non - residential properties.
+
+Let's start by seperating our data by land use, that way we can analyze sales by residential and commercial properties. Let's first see what unique land use values exist:
+
+```{r}
+land_vector <- c(county_sales$`land use`) |> 
+  sort() |> 
+  unique()
+land_vector
+```
+
+From what is provided online, we know that residential properties are represented by values 400 - 499, and residential properties by values 500 - 599, with 500 - 510 being normal single family homes, 520s are for duplexes, and 530s are for triplexes or more.
+
+##### Splitting the Data
+
+```{r}
+#Lets Split our data into test and training sets using the rsample package
+
+set.seed(123) #for reproducibility 
+split_sales <- initial_split(county_sales, prop = 0.7)
+
+train_sales <- training(split_sales)
+test_sales <- testing(split_sales)
+
+train_sales
+```
+
+```{r}
+# Lets first take 5 samples before we make changes to the data 
+
+s_1 <- slice_sample(train_sales, n = 58391, replace = TRUE)  
+s_2 <- slice_sample(train_sales, n = 58391, replace = TRUE) 
+s_3 <- slice_sample(train_sales, n = 58391, replace = TRUE)
+s_4 <- slice_sample(train_sales, n = 58391, replace = TRUE) 
+s_5 <- slice_sample(train_sales, n = 58391, replace = TRUE)  
+
+```
+
+##### Sample 1 Transformation
+
+```{r}
+s_1 <- s_1 |> 
+  rename(price = `last sale price`, sqft = tla, av = `appraised value`, sale_date = `sales date`, wall_type = `wall type`)
+
+#There are better methods of doing this especially with using KNN imputations, however I will show explicit ways of transforming the data: 
+
+s_1$price[s_1$price ==0] <- mean(s_1$price) #replace all zeros with the mean of price
+s_1$acres[s_1$acres == 0] <- mean(s_1$acres) #replace all zeros with the mean of acres
+s_1$baths[s_1$baths == 0] <- median(s_1$baths) #replace all zeros with the median
+s_1$bedrooms[s_1$bedrooms == 0] <- median(s_1$bedrooms) #replace all zeros with the median
+s_1$sqft[s_1$sqft == 0] <- mean(s_1$sqft) #replace all zeros with the mean 
+
+#outliers1 <- outliers::rm.outlier(s1_res$price)
+#We now will fill in all NA values with the nearest value to it using the fill function, and filter for residential properties 
+s1_res <- s_1 |> 
+  filter(price <= 15000000 & price >= 1000) |> 
+  fill(acres) |> 
+  fill(baths) |> 
+  fill(bedrooms) |> 
+  filter(sqft > 300 & sqft < 9966) |>  
+  fill(av) |> 
+  fill(stories) |> 
+  fill(yearbuilt) |> 
+  fill(wall_type) |> 
+  filter(`land use` >= 500 & `land use` < 600) |> 
+  filter(year(sale_date) >= 2021 & year(sale_date) < 2025) |> 
+  drop_na()
+  
+  
+  #drop rows that contain missing values 
+  
+
+
+#creating a new variable for the age of houses 
+Age_1 <- lubridate::year(s1_res$sale_date) - s1_res$yearbuilt
+s1_res <- s1_res |> 
+  mutate(Age_1, .after = yearbuilt)  #creating a new variable for the age of houses 
+
+#Checking for Null Values 
+if (is.null(s1_res)){
+    print("null exist")
+} else {
+  s1_res 
+}
+
+
+```
+
+```{r}
+ggplot(s1_res) +
+  geom_histogram(aes(Age_1), bins = 40)
+```
+
+Our age variable is almost a normal distribution which means we shouldn't have to change anything within our regression model for this variable.
+
+We still ha
+
+```{r}
+ggplot(s1_res, aes(sqft, price))+
+  geom_point()
+```
+
+After transforming and cleaning our data we still have a lot of outliers.
+
+```{r}
+s1_res$price |> 
+  quantile()
+
+s1_res$sqft |> 
+  quantile()
+```
+
+```{r}
+ggplot(s1_res, aes(sqft, price))+
+  geom_point()
+```
+
+##### Sample 2 Transformation
+
+```{r}
+s_2 <- s_2 |> 
+  rename(price = `last sale price`, sqft = tla, av = `appraised value`, sale_date = `sales date`, wall_type = `wall type`)
+
+#There are better methods of doing this especially with using KNN imputations, however I will show explicit ways of transforming the data: 
+
+s_2$price[s_2$price ==0] <- mean(s_2$price) #replace all zeros with the mean of price
+s_2$acres[s_2$acres == 0] <- mean(s_2$acres) #replace all zeros with the mean of acres
+s_2$baths[s_2$baths == 0] <- median(s_2$baths) #replace all zeros with the median
+s_2$bedrooms[s_2$bedrooms == 0] <- median(s_2$bedrooms) #replace all zeros with the median
+s_2$sqft[s_2$sqft == 0] <- mean(s_2$sqft) #replace all zeros with the mean 
+
+#We now will fill in all NA values with the nearest value to it using the fill function, and filter for residential properties 
+s2_res <- s_2 |> 
+  filter(price <= 15000000 & price >= 1000) |> 
+  fill(acres) |> 
+  fill(baths) |> 
+  fill(bedrooms) |> 
+  filter(sqft > 300 & sqft < 9966) |>  
+  fill(av) |> 
+  fill(stories) |> 
+  fill(yearbuilt) |> 
+  fill(wall_type) |> 
+  filter(`land use` >= 500 & `land use` < 600) |> 
+  filter(year(sale_date) >= 2021 & year(sale_date) < 2025) |> 
+  drop_na()
+  
+#creating a new variable for the age of houses 
+Age_2 <- lubridate::year(s2_res$sale_date) - s2_res$yearbuilt
+s2_res <- s2_res |> 
+  mutate(Age_2, .after = yearbuilt) #creating a new variable for the age of houses 
+
+#Checking for Null Values 
+if (is.null(s2_res)){
+    print("null exist")
+} else {
+  s2_res 
+}
+
+
+```
+
+```{r}
+ggplot(s2_res) +
+  geom_histogram(aes(Age_2), bins = 40)
+```
+
+##### Sample 3 Transformation
+
+```{r}
+s_3 <- s_3 |> 
+  rename(price = `last sale price`, sqft = tla, av = `appraised value`, sale_date = `sales date`, wall_type = `wall type`)
+
+#There are better methods of doing this especially with using KNN imputations, however I will show explicit ways of transforming the data: 
+
+s_3$price[s_3$price ==0] <- mean(s_3$price) #replace all zeros with the mean of price
+s_3$acres[s_3$acres == 0] <- mean(s_3$acres) #replace all zeros with the mean of acres
+s_3$baths[s_3$baths == 0] <- median(s_3$baths) #replace all zeros with the median
+s_3$bedrooms[s_3$bedrooms == 0] <- median(s_3$bedrooms) #replace all zeros with the median
+s_3$sqft[s_3$sqft == 0] <- mean(s_3$sqft) #replace all zeros with the mean 
+
+#We now will fill in all NA values with the nearest value to it using the fill function, and filter for residential properties 
+s3_res <- s_3 |> 
+   filter(price <= 15000000 & price >= 1000) |> 
+  fill(acres) |> 
+  fill(baths) |> 
+  fill(bedrooms) |> 
+  filter(sqft > 300 & sqft < 9966) |>  
+  fill(av) |> 
+  fill(stories) |> 
+  fill(yearbuilt) |> 
+  fill(wall_type) |> 
+  filter(`land use` >= 500 & `land use` < 600) |> 
+  filter(year(sale_date) >= 2021 & year(sale_date) < 2025) |> 
+  drop_na()
+
+Age_3 <- lubridate::year(s3_res$sale_date) - s3_res$yearbuilt
+s3_res <- s3_res |> 
+  mutate(Age_3, .after = yearbuilt) #creating a new variable for the age of houses 
+  
+
+#Checking for Null Values 
+if (is.null(s3_res)){
+    print("null exist")
+} else {
+  s3_res 
+}
+
+```
+
+```{r}
+ggplot(s3_res) +
+  geom_histogram(aes(Age_3), bins = 40)
+```
+
+##### Sample 4 Transformation
+
+```{r}
+s_4 <- s_4 |> 
+  rename(price = `last sale price`, sqft = tla, av = `appraised value`, sale_date = `sales date`, wall_type = `wall type`)
+
+#There are better methods of doing this especially with using KNN imputations, however I will show explicit ways of transforming the data: 
+
+s_4$price[s_4$price ==0] <- mean(s_4$price) #replace all zeros with the mean of price
+s_4$acres[s_4$acres == 0] <- mean(s_4$acres) #replace all zeros with the mean of acres
+s_4$baths[s_4$baths == 0] <- median(s_4$baths) #replace all zeros with the median
+s_4$bedrooms[s_4$bedrooms == 0] <- median(s_4$bedrooms) #replace all zeros with the median
+s_4$sqft[s_4$sqft == 0] <- mean(s_4$sqft) #replace all zeros with the mean 
+
+#We now will fill in all NA values with the nearest value to it using the fill function, and filter for residential properties 
+s4_res <- s_4 |> 
+   filter(price <= 15000000 & price >= 1000) |> 
+  fill(acres) |> 
+  fill(baths) |> 
+  fill(bedrooms) |> 
+  filter(sqft > 300 & sqft < 9966) |>  
+  fill(av) |> 
+  fill(stories) |> 
+  fill(yearbuilt) |> 
+  fill(wall_type) |> 
+  filter(`land use` >= 500 & `land use` < 600) |> 
+  filter(year(sale_date) >= 2021 & year(sale_date) < 2025) |> 
+  drop_na()
+
+
+Age_4 <- lubridate::year(s4_res$sale_date) - s4_res$yearbuilt
+
+s4_res <- s4_res |>  
+  mutate(Age_4, .after = yearbuilt) #creating a new variable for the age of houses 
+
+#Checking for Null Values 
+if (is.null(s4_res)){
+    print("null exist")
+} else {
+  s4_res 
+}
+  
+```
+
+```{r}
+ggplot(s4_res) +
+  geom_histogram(aes(Age_4), bins = 40)
+```
+
+##### Sample 5 Transformation
+
+For our last sample we will use latitude and longitudal data to see if using it makes a difference in our model precision.
+
+```{r}
+#attaching my API Key into the global environment
+Sys.setenv(MAPBOX_API_KEY = "sk.eyJ1IjoiamRlZW4xMWIiLCJhIjoiY21pZmdqZ2gxMDEwNjNlcHBwaDA5Y3p3biJ9.rUnpninsVVBx2EBc7K1A1g")
+
+s_5 <- s_5 |> 
+  rename(price = `last sale price`, sqft = tla, av = `appraised value`, sale_date = `sales date`, wall_type = `wall type`) #|> 
+
+#There are better methods of doing this especially with using KNN imputations, however I will show explicit ways of transforming the data: 
+
+s_5$price[s_5$price ==0] <- mean(s_5$price) #replace all zeros with the mean of price
+s_5$acres[s_5$acres == 0] <- mean(s_5$acres) #replace all zeros with the mean of acres
+s_5$baths[s_5$baths == 0] <- median(s_5$baths) #replace all zeros with the median
+s_5$bedrooms[s_5$bedrooms == 0] <- median(s_5$bedrooms) #replace all zeros with the median
+s_5$sqft[s_5$sqft == 0] <- mean(s_5$sqft) #replace all zeros with the mean 
+
+#We now will fill in all NA values with the nearest value to it using the fill function, and filter for residential properties 
+s5_res <- s_5 |> 
+  filter(price <= 15000000 & price >= 1000) |> 
+  fill(acres) |> 
+  fill(baths) |> 
+  fill(bedrooms) |> 
+  filter(sqft > 300 & sqft < 9966) |>  
+  fill(av) |> 
+  fill(stories) |> 
+  fill(yearbuilt) |> 
+  fill(wall_type) |> 
+  filter(`land use` >= 500 & `land use` < 600) |> 
+  filter(year(sale_date) >= 2021 & year(sale_date) < 2025) |> 
+  drop_na()
+
+  #drop rows that contain missing values 
+
+
+Age_5 <- lubridate::year(s5_res$sale_date) - s5_res$yearbuilt
+s5_geo <- s5_res |> 
+  mutate(Age_5, .after = yearbuilt) |> 
+  #creating a new address variable 
+  unite(col = "address", address, city, state, zip, sep = ",")
+  #calling on the API to convert address into longitude and latitude; expected time is about one hour 
+   #tidygeocoder::geocode(
+   #address = address,
+   #method = "mapbox",
+   #return_input = TRUE)
+
+
+#Checking for Null Values 
+if (is.null(s5_geo)){
+    print("null exist")
+} else {
+  s5_geo 
+}
+
+#Lets save this data frame as a csv file so we don't need to send it through the API again
+#write.csv(s5_geo, file = '/Users/deen/Documents/Education/Economic Research/Real Estate Prices.csv', row.names = FALSE)
+s5_geo <- read_csv('/Users/deen/Documents/Education/Economic Research/sample5_geodata.csv')
+s5_geo
+```
+
+We need to get our longitude and latitude points set up in a way that R properly interprets them using the sf library
+
+```{r}
+
+s5_sf_geo <- st_as_sf(s5_geo, coords = c("lat", "long"), crs = 4326) #Converting the longitude and latitude variables into geometric points to properly be read
+```
+
+```{r}
+ggplot(s5_geo) +
+  geom_histogram(aes(Age_5), bins = 40)
+```
+
+## Model Selection
+
+Let's recall our initial hypotheses:
+
+-   ***Square footage is the best indication of the projected sale of a residential property***
+
+    -   The goal of solving this problem is to help professionals in Lucas county to better assess residential properties so there is a fair market value of it.
+    -   $$
+        H_{0}: \beta_{1} = \beta_{k} = 0 \\ H_{A}: \beta_{1} \neq \beta_{k} \neq 0
+        $$
+
+-   ***Location is not the most deterministic causal variable on the sale of a residential property***
+
+    -   The goal of answering this is the same as the previous.
+    -   $$
+        H_{0}: \beta_{L} < \beta_{k} \ where \ L \ represents \ all\ observations \ of \ location \ and \ k \ all \ observations \ of \ the \ other \ coefficients \\ H_{A}: \beta_{L} > \beta_{k} \ where \ L \ represents \ all\ observations \ of \ location \ and \ k \ all \ observations \ of \ the \ other \ coefficients 
+        $$
+
+-   ***The age of a house does not have a statistically significant effect on a residential property's sale price.***
+
+    -   Many of the BOR officers assumed that the year a property was built was causal on the sales price.
+
+-   ***The Expected mean of the sale price is about the same as the expected mean of the appraised value.***
+
+    -   Per the Ohio Revised code BOR officers can not use equalization to determine the fair market value of a home. Meaning they can not compare the auditors value for one property to that of another due to us not being able to see variables in the house - ie condition, negative externalities.
+
+-   **The proportion of firms buying residential properties to consumers buying residential properties is greater than 0.5.**
+
+    -   During BOR many people complained about companies harassing them to sell their property. I also had saw in the data large amounts of parcels being bought by companies in single sales.
+
+    -   $$
+        H_{0}: \frac{\bar x_{firms_{t}}}{\bar x_{consumers_{t}}} > 0.5 \\ H_{A}: \frac{\bar x_{firms_{t}}}{\bar x_{consumers_{t}}} < 0.5
+        $$
+
+### Sample 1
+
+```{r}
+
+rlm1 <- lm(log(price) ~ log(sqft), s1_res) #Square footage Hypothesis 
+rlm1.1 <- lm(log(price) ~ Age_1, s1_res) #Testing the effects of age 
+rlm1.2 <- lm(log(price) ~ `tax district`, s1_res) #testing location's effect on price
+expect_1 <- mean(s1_res$price) == mean(s1_res$av) #checking if the means are equivalent or not between the appraiser and sales
+stargazer(rlm1, rlm1.1, rlm1.2, expect_1, type = "text")
+
+print(expect_1)
+
+#Lets now see what our residuals for each model looks like compared to the fitted values 
+
+augrlm1 <- augment(rlm1)
+augrlm1.1 <- augment(rlm1.1)
+augrlm1.2 <- augment(rlm1.2)
+
+ggplot(augrlm1, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_1 Residuals vs. Fitted")
+
+ggplot(augrlm1.1, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_1_age: Residuals vs. Fitted")
+
+ggplot(augrlm1.2, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_1_loc Residuals vs. Fitted")
+```
+
+From looking at our scatter plots we see that each model has some heteroskedasticity in them and as well as correlation between variables, and outliers.
+
+```{r}
+ggplot(augrlm1, aes(x = .fitted))+
+  geom_boxplot()+
+  labs(title = "Fitted Values")
+
+ggplot(augrlm1, aes(x = .resid))+
+  geom_boxplot()+
+  labs(title = "Residuals")
+```
+
+```{r}
+rlm1.3 <- lm(log(price) ~ log(sqft) + log(acres) + Age_1 + `tax district` + log(baths) + log(bedrooms) + as.factor(stories), s1_res)
+
+rlm1.3.RSE <-  rlm1.3 |> 
+  coeftest(vcov = vcovHC)
+
+rlm1.3.CSE <- rlm1.3 |>
+  coeftest(vcov = vcovCL, cluster = ~`tax district`)
+
+stargazer(rlm1.3, rlm1.3.RSE, rlm1.3.CSE, type = "text")
+
+resid_rlm1.3 <- resid(rlm1.3) 
+fitted_rlm1.3 <- fitted(rlm1.3)
+library(Metrics)
+rmse_rlm1.3 <- rmse(fitted_rlm1.3, resid_rlm1.3)
+
+rmse_rlm1.3
+
+augrlm1.3 <- augment(rlm1.3)
+
+ggplot(augrlm1.3, aes(x = .fitted, y = .resid))+
+  geom_point()
+```
+
+```{r}
+rlm1.4 <- lm(log(price) ~ log(sqft) + log(acres) + log(bedrooms) + log(baths) + Age_1 + as.factor(`tax district`) + as.factor(stories) + as.factor(year(sale_date)) + as.factor(wall_type) + as.factor(`land use`), s1_res)
+
+rlm1.4.RSE <- rlm1.4 |> 
+  coeftest(vcov = vcovHC)
+
+rlm1.5 <- lm(log(price) ~ log(sqft) + log(acres) + I(log(bedrooms+baths)) + Age_1 + as.factor(`tax district`) + as.factor(stories) + as.factor(year(sale_date)) + as.factor(`land use`), s1_res)
+
+rlm1.5.RSE <- rlm1.5 |> 
+  coeftest(vcov = vcovHC)
+
+stargazer(rlm1.4, rlm1.4.RSE, rlm1.5, rlm1.5.RSE, type = "text")
+```
+
+After using robust standard errors on these models, we can see that non of our parameters are statistically significant
+
+### Sample 2
+
+```{r}
+rlm2 <- lm(log(price) ~ log(sqft), s2_res) #Square footage Hypothesis 
+rlm2.1 <- lm(log(price) ~ Age_2, s2_res) #Testing the effects of age 
+rlm2.2 <- lm(log(price) ~ `tax district`, s2_res) #testing location's effect on price
+expect_2 <- mean(s2_res$price) == mean(s2_res$av) #checking if the means are equivalent or not between the appraiser and sales
+stargazer(rlm2, rlm2.1, rlm2.2, expect_2, type = "text")
+
+print(expect_2)
+
+#Lets now see what our residuals for each model looks like compared to the fitted values 
+
+augrlm2 <- augment(rlm2)
+augrlm2.1 <- augment(rlm2.1)
+augrlm2.2 <- augment(rlm2.2)
+
+ggplot(augrlm2, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_1 Residuals vs. Fitted")
+
+ggplot(augrlm2.1, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_1_age: Residuals vs. Fitted")
+
+ggplot(augrlm2.2, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_1_loc Residuals vs. Fitted")
+```
+
+**NOTE: *THERE IS DATA LEAKAGE DUE TO WHEN I TRANSORMED MY DATA.***
+
+### Sample 3
+
+```{r}
+rlm3 <- lm(log(price) ~ sqft, s3_res) #Square footage Hypothesis 
+rlm3.1 <- lm(log(price) ~ Age_3, s3_res) #Testing the effects of age 
+rlm3.2 <- lm(log(price) ~ `tax district`, s3_res) #testing location's effect on price
+expect_3 <- mean(s3_res$price) == mean(s3_res$av) #checking if the means are equivalent or not between the appraiser and sales
+stargazer(rlm3, rlm3.1, rlm3.2, type = "text")
+
+augres3 <- augment(rlm3)
+augres3.1 <- augment(rlm3.1)
+augres3.2 <- augment(rlm3.2)
+
+ggplot(augres3, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_3 Residuals vs. Fitted") + 
+  geom_smooth()
+
+ggplot(augres3.1, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_3_age: Residuals vs. Fitted")+
+  geom_smooth()
+
+ggplot(augres3, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_3_loc Residuals vs. Fitted")+
+  geom_smooth()
+
+print(expect_3)
+```
+
+```{r}
+rlm3.3 <- lm(log(price) ~ log(sqft) + log(acres) + Age_3 + `tax district` + log(baths) + log(bedrooms) + stories, s3_res)
+
+rlm3.4 <- lm(log(price) ~ log(sqft) + log(acres) + log(bedrooms) + log(baths) + Age_3 + as.factor(`tax district`) + as.factor(stories) + as.factor(year(sale_date)) + as.factor(wall_type) + as.factor(`land use`), s3_res)
+
+rlm3.5 <- lm(log(price) ~ log(sqft) + log(acres) + I(log(bedrooms+baths)) + Age_3 + as.factor(stories) + as.factor(year(sale_date)) + as.factor(`land use`), s3_res)
+
+rlm3.3.RSE <- rlm3.3 |> 
+  coeftest(vcov = vcovHC)
+
+rlm3.4.RSE <- rlm3.4 |> 
+  coeftest(vcov = vcovHC)
+
+rlm3.5.RSE <- rlm3.5 |> 
+  coeftest(vcov = vcovHC)
+
+stargazer(rlm3.3, rlm3.3.RSE, rlm3.4, rlm3.4.RSE, rlm3.5, rlm3.5.RSE, type = "text")
+
+
+augrlm3.3 <- augment(rlm3.3)
+
+ggplot(augrlm3.3, aes(x = .fitted, y = .resid))+
+  geom_point()
+
+augrlm3.4 <- augment(rlm3.4)
+
+ggplot(augrlm3.4, aes(x = .fitted, y = .resid))+
+  geom_point()
+
+augrlm3.5 <- augment(rlm3.5)
+
+ggplot(augrlm3.5, aes(x = .fitted, y = .resid))+
+  geom_point()
+```
+
+### Sample 4
+
+```{r}
+rlm4 <- lm(log(price) ~ sqft, s4_res) #Square footage Hypothesis 
+rlm4.1 <- lm(log(price) ~ Age_4, s4_res) #Testing the effects of age 
+rlm4.2 <- lm(log(price) ~ `tax district`, s4_res) #testing location's effect on price
+expect_4 <- mean(s4_res$price) == mean(s4_res$av) #checking if the means are equivalent or not between the appraiser and sales
+stargazer(rlm4, rlm4.1, rlm4.2, type = "text")
+
+augres4 <- augment(rlm4) #creating a dataframe from the fitted and residual values
+augres4.1 <- augment(rlm4.1) #creating a dataframe from the fitted and residual values
+augres4.2 <- augment(rlm4.2) #creating a dataframe from the fitted and residual values
+
+ggplot(augres4, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_4 Residuals vs. Fitted")+
+  geom_smooth()
+
+ggplot(augres4.1, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_4_age: Residuals vs. Fitted")+
+  geom_smooth()
+
+ggplot(augres4.2, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  labs(title = "lm_rest_4_loc Residuals vs. Fitted") +
+  geom_smooth()
+
+
+print(expect_4)
+```
+
+### Sample 5
+
+```{r}
+rlm5 <- lm(log(price) ~ log(sqft), s5_geo) #Square footage Hypothesis 
+rlm5.1 <- lm(log(price) ~ Age_5, s5_geo) #Testing the effects of age 
+rlm5.2 <- lm(log(price) ~ as.factor(`tax district`), s5_geo) #testing location's effect on price
+rlm5.3 <- lm(log(price) ~ I(long+lat), s5_geo) #dependent on lat & long
+expect_5 <- mean(s5_geo$price) == mean(s5_geo$av) #checking if the means are equivalent or not between the appraiser and sales
+
+stargazer(rlm5, rlm5.1, rlm5.2, rlm5.3, type = "text")
+
+augrlm5 <- augment(rlm5) 
+augrlm5.1 <- augment(rlm5.1)
+augrlm5.2 <- augment(rlm5.2)
+augrlm5.3 <- augment(rlm5.3)
+
+ggplot(augrlm5, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  geom_smooth()+ 
+  labs(title = "Augmented_rlm5", subtitle = "log(price) ~ log(sqft)") 
+
+ggplot(augrlm5.1, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  geom_smooth()+
+  labs(title = "augmented_rlm5.1", subtitle = "log(price) ~ Age_5")
+
+ggplot(augrlm5.2, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  geom_smooth()+
+  labs(title = "augmented_rlm5.2", subtitle = "log(price) ~ tax district")
+
+ggplot(augrlm5.3, aes(x = .fitted, y = .resid))+
+  geom_point()+
+  geom_smooth()+
+  labs(title = "augmented_rlm5.3", subtitle = "log(price) ~ geometry")
+
+print(expect_5)
+```
+
+From looking at our models above we can see that there is heteroskedasticity in each model. Furthermore it seems that we might be better off using a general linear model since there seems to not be much linearity between our fitted and residual values. Also, these models together supports my hypothesis that square footage is not the most deterministic parameter for determining the marginal increase or decrease in the sale price. Surprisingly, by looking at our second model, it seems that Age fits the variance in the data more than the other variables. Furthermore, the tax district accounts for our spatial autocorrelation, and also takes into account the school district that each of our observations lives in. From looking at our plot of tax districts residuals and the fitted values we see that it is flat which indicates goodness of fit. It accounts for more of the variance. Also Now we need to find the coefficients using robust standard errors.
+
+```{r}
+rlm5.RSE <- rlm5 |> 
+  coeftest(vcov = vcovHC)
+
+rlm5.1.RSE <- rlm5.1 |> 
+  coeftest(vcov = vcovHC)
+
+rlm5.2.RSE <- rlm5.2 |> 
+  coeftest(vcov = vcovHC)
+
+rlm5.3.RSE <- rlm5.3 |> 
+  coeftest(vcov = vcovHC)
+
+stargazer(rlm5.RSE, rlm5.1.RSE, rlm5.2.RSE, rlm5.3.RSE, type = "text")
+  
+```
+
+```{r}
+rlm5.4 <- lm(log(price) ~ log(sqft) + log(acres) + log(bedrooms) + log(baths) + Age_5 + I(lat + long) + as.factor(stories) + as.factor(year(sale_date)) + as.factor(wall_type) + as.factor(`land use`), s5_geo)
+
+rlm5.4.RSE <- rlm5.4 |> 
+  coeftest(vcov = vcovHC) #Heteroskedasticity robust standard errors 
+
+rlm5.4.CSE <- rlm5.4 |> 
+  coeftest(vcov = vcovCL, cluster = ~ `tax district`)
+  
+
+stargazer(rlm5.4, rlm5.4.RSE, rlm5.4.CSE, type = "text")
+```
+
+```{r}
+library(Metrics)
+resid_rlm5.4 <- resid(rlm5.4) 
+fitted_rlm5.4 <- fitted(rlm5.4)
+
+rmse_rlm5.4 <- rmse(fitted_rlm5.4, resid_rlm5.4)
+
+rmse_rlm5.4
+```
+
+```{r}
+rlm5.5 <- lm(log(price) ~ log(sqft) + log(acres) + bedrooms + baths + Age_5 + as.factor(`tax district`)*(lat + long) + as.factor(stories) + as.factor(year(sale_date)) + as.factor(`land use`), s5_geo) 
+
+rlm5.6 <- lm(log(price) ~ log(sqft) + log(acres) + log(bedrooms):log(baths) + Age_5 + as.factor(stories) + as.factor(year(sale_date)) + as.factor(wall_type) + as.factor(`land use`), s5_geo)
+
+stargazer(rlm5.5, rlm5.6, type = "text")
+```
+
+```{r}
+rlm5.5.RSE <- rlm5.5 |> 
+  coeftest(vcov = vcovHC)
+
+rlm5.6.RSE <- rlm5.6 |> 
+  coeftest(vcov = vcovHC)
+
+stargazer(rlm5.5, rlm5.5.RSE, rlm5.6, rlm5.6.RSE, type = "text")
+```
+
+##### Chosen Model for Sample 5
+
+For sample 5 it seems that our fourth linear model performed the best out of all the other models. Thus, for our testing data we will use rlm5.4.
+
+### Test Set
+
+With Sample 5 restricted model 4 I had the best performance in terms of fitting my model to the data. Something to keep in mind though is that there was some data leakage from my training set, which I will address in a follow on project once I gain better knowledge on how to utilize spatial weights and as well as using the tidygeocoder API. Therefore we will implement the same procedure as we did for sample 5 for the training set. Keep in mind there are better ways to implement all of these changes using algorithms like K Nearest Neighbor Imputation which can be used with the caret package or rsample.
+
+```{r}
+
+#attaching my API Key into the global environment
+Sys.setenv(MAPBOX_API_KEY = "sk.eyJ1IjoiamRlZW4xMWIiLCJhIjoiY21pZmdqZ2gxMDEwNjNlcHBwaDA5Y3p3biJ9.rUnpninsVVBx2EBc7K1A1g")
+
+t_1 <- test_sales|> 
+  rename(price = `last sale price`, sqft = tla, av = `appraised value`, sale_date = `sales date`, wall_type = `wall type`) #|> 
+
+#There are better methods of doing this especially with using KNN imputations, however I will show explicit ways of transforming the data: 
+
+t_1$price[t_1$price ==0] <- mean(t_1$price) #replace all zeros with the mean of price
+t_1$acres[t_1$acres == 0] <- mean(t_1$acres) #replace all zeros with the mean of acres
+t_1$baths[t_1$baths == 0] <- median(t_1$baths) #replace all zeros with the median
+t_1$bedrooms[t_1$bedrooms == 0] <- median(t_1$bedrooms) #replace all zeros with the median
+t_1$sqft[t_1$sqft == 0] <- mean(t_1$sqft) #replace all zeros with the mean 
+
+#We now will fill in all NA values with the nearest value to it using the fill function, and filter for residential properties 
+t1_res <- t_1 |> 
+  filter(price <= 15000000 & price >= 1000) |> 
+  fill(acres) |> 
+  fill(baths) |> 
+  fill(bedrooms) |> 
+  filter(sqft > 300 & sqft < 9966) |>  
+  fill(av) |> 
+  fill(stories) |> 
+  fill(yearbuilt) |> 
+  fill(wall_type) |> 
+  filter(`land use` >= 500 & `land use` < 600) |> 
+  filter(year(sale_date) >= 2021 & year(sale_date) < 2025) |> 
+  drop_na()
+
+  #drop rows that contain missing values 
+
+
+Age_Test <- lubridate::year(t1_res$sale_date) - t1_res$yearbuilt
+t1_geo <- t1_res |> 
+  mutate(Age_Test, .after = yearbuilt) |>  
+  #creating a new address variable 
+  unite(col = "address", address, city, state, zip, sep = ",") 
+  #calling on the API to convert address into longitude and latitude; expected time is about one hour 
+   #tidygeocoder::geocode(
+   #address = address,
+   #method = "mapbox",
+   #return_input = TRUE)
+
+
+#Checking for Null Values 
+if (is.null(t1_geo)){
+    print("null exist")
+} else {
+  t1_geo 
+}
+
+#Lets save this data frame as a csv file so we don't need to send it through the API again
+#write.csv(t1_geo, file = '/Users/deen/Documents/Education/Economic Research/Real Estate Prices.csv', row.names = FALSE)
+t1_geo <- read.csv('/Users/deen/Documents/Education/Economic Research/test_data.csv')
+t1_geo
+```
+
+Now let's apply the same model that we utilized from sample 5 restricted model 4
+
+```{r}
+test_lm <- lm(log(price) ~ log(sqft) + log(acres) + log(bedrooms) + log(baths) + Age_Test + I(lat + long) + as.factor(stories) + as.factor(year(sale_date)) + as.factor(wall_type) + as.factor(land.use), t1_geo)
+
+test_lm_RSE <- test_lm |>  
+  coeftest(vcov = vcovHC) #using robust standard errors 
+
+test_lm_CSE <- test_lm |> 
+  coeftest(vcov=vcovCL,cluster = ~ tax.district) #Clustered Standard Errors 
+
+
+augtest <- augment(test_lm)
+
+
+ggplot(augtest, aes(.fitted, .resid))+ 
+  geom_point() 
+
+stargazer(test_lm, test_lm_RSE, test_lm_CSE, type = "text") 
+```
+
+We can see that by using the rlm5.4 model initially non of our parameters are statistically significant. However, by clustering our errors around the tax district we can see that many of our parameters are significant.
+
+Lets now use the Root Mean Standard Error test to see how well this model accounts for the data:
+
+```{r}
+fit.testlm <- fitted(test_lm)
+resid.testlm <- resid(test_lm)
+
+rmse_testlm <- rmse(fit.testlm, resid.testlm)
+
+print(rmse_testlm)
+```
+
+Let's also check for perfect multicollinearity using the VIF function:
+
+```{r}
+
+var.inf.testlm <- vif(test_lm) 
+var.inf.testlm
+```
+
+Lets use rlm1.3 model on our test set next for assessment on if it is generalizable, however we will add sale date to account for autocorrelation:
+
+```{r}
+testlm1 <- lm(log(price) ~ log(sqft) + log(acres) + Age_Test + as.factor(tax.district) + log(baths) + log(bedrooms) + as.factor(stories) + as.factor(year(t1_geo$sale_date)), t1_geo)
+
+testlm1.RSE <- testlm1 |>  
+  coeftest(vcov = vcovHC) 
+
+testlm1.CSE <- testlm1 |> 
+  coeftest(vcov=vcovCL,cluster = ~ tax.district) #Clustered Standard Errors 
+
+
+stargazer(testlm1, testlm1.RSE, testlm1.CSE, type = "text") 
+```
+
+```{r}
+#RMSE for testlm1
+
+fit.testlm1 <- fitted(testlm1)
+resid.testlm1 <- resid(testlm1)
+
+rmse_testlm1 <- rmse(fit.testlm1, resid.testlm1)
+
+print(rmse_testlm1)
+```
+
+We can see that both test models have the same RMSE. Which suggest that either model would suffice in precision power. However, let's check the Variance Inflation Factor for multicollinearity variables:
+
+```{r}
+var.inf.testlm1 <- vif(testlm1)
+var.inf.testlm1
+```
+
+Non of our variables in this model have significant multicollinearity. Thus, we don't need to remove any of them from our model.
+
+### Conclusion
+
+After using clustered standard errors on my test sets in which I clustered my errors around the tax district, the model was able to show that at least one of our parameters are not equal to zero. In terms of choosing our model for prediction and inference, I will be using the testlm1 model mainly for the reason that it doesn't include the longitude and latitude variables - which I can't analyze in my regression because R doesn't interpret it as a spatial weight. There are packages like "sf" and "stars" that allow for this. However, it requires a deeper understanding of spatial statistical analysis.
+
+Going back to our null hypotheses, we can see that sqft does not in fact account for the majority of the variance in the price of a house. But rather location does. Square footage is secondary to the location in terms of causal inference. To better interpret these variables lets see which tax district they are being compared to.
+
+```{r}
+
+unique(t1_geo$tax.district)
+
+```
+
+We can now see that our categorical variables are being compared to all the residential properties that are within the "Toledo City - Toledo CSD (City School District)". We can see that houses in Ottawa Hills sale for 160% more than homes in the Toledo City School District. Which makes sense and confirms many of the observations that I had. Homes in Ottawa hills sale at higher prices compared to every district in Lucas County. There is only one township in the county that sales for less compared to homes in the Toledo CSD; Harding TWP - Toledo CSD see a 34% decrease in the sales price. It is not as statistically significant as all of the other categories. We can be 90% certain that we would see a 34% decrease in the sales price within that township.
+
+The tax and school district that a property falls in is the most causal variable within this data set. After the tax district is the square footage - for a 1% increase in the square footage there is a 59% increase in the price. For every 1% increase in acreage there is a 21.5% increase in the the price.
+
+```{r}
+unique(t1_geo$stories)
+```
+
+For interpreting the stories of a house we are comparing it to a "BI-LEVEL". A one story house with an attic is predicted to sale for 11.2% more than a bi-level, and a three story home is predicted to sale for 41.6% more than a bi-level. The other categories in the "stories" variable are not statistically significant.
+
+What would be surprising to some of the people that come to BOR is that the amount of bathrooms and bedrooms that a house has is not statistically significant in determining the sales price. Something that I would assume is that the layout of a house could have an effect on the price, however it isn't observed in our data set. Lastly, when accounting for autocorrelation we can see that with each year the price of properties increases, with a larger increase in sales prices from 2022 to 2023.
